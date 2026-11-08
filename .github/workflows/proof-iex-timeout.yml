@@ -1,0 +1,57 @@
+# TEMPORARY Windows live proof for the iex-failure test timeout. Never merges.
+name: proof-iex-timeout
+on:
+  push:
+    branches: ['proof/iex-install-timeout-win']
+permissions:
+  contents: read
+jobs:
+  leg:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [blacksmith-32vcpu-windows-2025, windows-latest-32-arm-core]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+        with: { fetch-depth: 3 }
+      - name: Set up native ARM64 build dependencies
+        if: runner.arch == 'ARM64'
+        uses: ./.github/actions/setup-windows-build-deps
+      - uses: ./.github/actions/setup-pm
+        with:
+          extras: '["messaging"]'
+          test-environment: 'true'
+          prune-python-cache: true
+      - name: Warm PowerShell module cache
+        timeout-minutes: 3
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\ci\warm_powershell_module_cache.ps1
+      - name: RED probe - main's fixture (empty git.exe), output to files
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          for i in 1 2 3; do python .proof/probe.py "$PWD" "main-fixture-$i"; done
+      - name: RED - main's test file via run_tests.sh
+        timeout-minutes: 15
+        continue-on-error: true
+        shell: bash
+        run: |
+          git show HEAD~2:tests/scripts/install/test_install_ps1_iex_failure.py > tests/scripts/install/test_install_ps1_iex_failure_main.py
+          echo 'Base-test assertions (download must not happen) added:'
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("tests/scripts/install/test_install_ps1_iex_failure_main.py")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace("    assert REFUSAL in result.stdout\n", "    assert REFUSAL in result.stdout\n    assert 'installing git' not in result.stdout, result.stdout\n")
+          p.write_text(s, encoding="utf-8")
+          PY
+          scripts/run_tests.sh tests/scripts/install/test_install_ps1_iex_failure_main.py -- -m "platforms and not integration" -v --tb=short
+          rm -f tests/scripts/install/test_install_ps1_iex_failure_main.py
+      - name: GREEN - fixed test file via run_tests.sh x3
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          rm -f tests/scripts/install/test_install_ps1_iex_failure_main.py
+          for i in 1 2 3; do scripts/run_tests.sh tests/scripts/install/test_install_ps1_iex_failure.py -- -m "platforms and not integration" -v --tb=short || exit 1; done
